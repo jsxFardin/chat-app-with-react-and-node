@@ -3,12 +3,13 @@ const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const ws = require('ws');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const User = require('./models/User');
-const jwtSecret = process.env.JWT_SECRET;
 const bcryptSalt = bcrypt.genSaltSync(10);
 dotenv.config();
+const jwtSecret = process.env.JWT_SECRET;
 mongoose.connect(process.env.MONGO_URL);
 const db = mongoose.connection;
 db.on('error', console.error.bind(console, 'MongoDB connection error:'));
@@ -81,4 +82,65 @@ app.post('/register', async (req, res) => {
     }
 });
 
-app.listen(4000)
+const server = app.listen(4000);
+
+const wss = new ws.WebSocketServer({ server });
+wss.on('connection', (connection, req) => {
+    const cookies = req.headers.cookie;
+    if (cookies) {
+        const tokenCookieString = cookies.split(';').find(str => str.startsWith('token='));
+        if (tokenCookieString) {
+            const token = tokenCookieString.split('=')[1];
+            if (token) {
+                jwt.verify(token, jwtSecret, {}, (err, userData) => {
+                    if (err) throw err;
+                    const { userId, username } = userData;
+                    connection.userId = userId;
+                    connection.username = username;
+                });
+            }
+        }
+    }
+
+    connection.on('message', async (message) => {
+        const messageData = JSON.parse(message.toString());
+        const { recipient, text, file } = messageData;
+        let filename = null;
+        if (file) {
+            console.log('size', file.data.length);
+            const parts = file.name.split('.');
+            const ext = parts[parts.length - 1];
+            filename = Date.now() + '.' + ext;
+            const path = __dirname + '/uploads/' + filename;
+            const bufferData = new Buffer(file.data.split(',')[1], 'base64');
+            fs.writeFile(path, bufferData, () => {
+                console.log('file saved:' + path);
+            });
+        }
+        if (recipient && (text || file)) {
+            // const messageDoc = await Message.create({
+            //     sender: connection.userId,
+            //     recipient,
+            //     text,
+            //     file: file ? filename : null,
+            // });
+            console.log('created message');
+            [...wss.clients]
+                .filter(c => c.userId === recipient)
+                .forEach(c => c.send(JSON.stringify({
+                    text,
+                    sender: connection.userId,
+                    recipient,
+                    // file: file ? filename : null,
+                    // _id: messageDoc._id,
+                })));
+        }
+    });
+
+    [...wss.clients].forEach(client => {
+        client.send(JSON.stringify({
+            online: [...wss.clients].map(c => ({ userId: c.userId, username: c.username })),
+        }));
+    });
+
+});
