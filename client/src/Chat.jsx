@@ -1,7 +1,9 @@
-import { useState, useEffect, useContext } from "react";
+import { useState, useEffect, useContext, useRef } from "react";
 import Contact from "./Contact";
 import Logo from "./Logo";
 import { UserContext } from "./UserContext.jsx";
+import { uniqBy } from "lodash";
+import axios from "axios";
 
 export default function Chat() {
 
@@ -11,11 +13,39 @@ export default function Chat() {
     const { username, id, setId, setUsername } = useContext(UserContext);
     const [newMessageText, setNewMessageText] = useState('');
     const [messages, setMessages] = useState([]);
+    const divUnderMessages = useRef();
+
     useEffect(() => {
+        connectToWs();
+    }, [selectedUserId]);
+
+    function connectToWs() {
         const ws = new WebSocket('ws://localhost:4000');
         setWs(ws);
-        ws.addEventListener('message', handleMessage)
-    }, []);
+        ws.addEventListener('message', handleMessage);
+        ws.addEventListener('close', () => {
+            setTimeout(() => {
+                console.log('Disconnected. Trying to reconnect.');
+                connectToWs();
+            }, 1000);
+        });
+    }
+
+    useEffect(() => {
+        const div = divUnderMessages.current;
+        if (div) {
+            div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+    }, [messages]);
+
+    useEffect(() => {
+        if (selectedUserId) {
+            axios.get('/messages/' + selectedUserId).then(res => {
+                setMessages(res.data);
+            });
+        }
+    }, [selectedUserId]);
+
 
     function showOnlinePeople(peopleArray) {
         const people = {};
@@ -31,14 +61,11 @@ export default function Chat() {
         if ('online' in messageData) {
             showOnlinePeople(messageData.online);
         }
-        else {
-            console.log(messageData);
+        else if ('text' in messageData) {
+            // if (messageData.sender === selectedUserId) {
+            setMessages(prev => ([...prev, { ...messageData }]));
+            // }
         }
-        // else if ('text' in messageData) {
-        //     if (messageData.sender === selectedUserId) {
-        //         setMessages(prev => ([...prev, { ...messageData }]));
-        //     }
-        // }
     }
 
     function sendMessage(ev) {
@@ -47,9 +74,18 @@ export default function Chat() {
             recipient: selectedUserId,
             text: newMessageText,
         }));
+        setNewMessageText('');
+        setMessages(prev => ([...prev, {
+            text: newMessageText,
+            sender: id,
+            recipient: selectedUserId,
+            _id: Date.now(),
+        }]));
     }
     const onlinePeopleExclOurUser = { ...onlinePeople };
     delete onlinePeopleExclOurUser[id];
+
+    const messagesWithoutDupes = uniqBy(messages, '_id');
 
     return (
         <div className="flex h-screen">
@@ -73,6 +109,20 @@ export default function Chat() {
                     {!selectedUserId && (
                         <div className="flex h-full flex-grow items-center justify-center">
                             <div className="text-gray-300">&larr; Select a person from the sidebar</div>
+                        </div>
+                    )}
+                    {!!selectedUserId && (
+                        <div className="relative h-full">
+                            <div className="overflow-y-scroll absolute top-0 left-0 right-0 bottom-2">
+                                {messagesWithoutDupes.map(message => (
+                                    <div key={message._id} className={"mr-2 " + (message.sender === id ? 'text-right' : 'text-left')}>
+                                        <div className={"text-left inline-block p-2 my-2 rounded-md text-sm " + (message.sender === id ? 'bg-blue-500 text-white' : 'bg-white text-gray-500')}>
+                                            {message.text}
+                                        </div>
+                                    </div>
+                                ))}
+                                <div ref={divUnderMessages}></div>
+                            </div>
                         </div>
                     )}
                 </div>

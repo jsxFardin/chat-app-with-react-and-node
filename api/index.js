@@ -7,6 +7,7 @@ const ws = require('ws');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const User = require('./models/User');
+const Message = require('./models/Message');
 const bcryptSalt = bcrypt.genSaltSync(10);
 dotenv.config();
 const jwtSecret = process.env.JWT_SECRET;
@@ -28,10 +29,20 @@ app.use(cors({
     origin: process.env.CLIENT_URL
 }));
 
-app.get('/test', (req, res) => {
-    res.json('test ok')
-});
+async function getUserDataFromRequest(req) {
+    return new Promise((resolve, reject) => {
+        const token = req.cookies?.token;
+        if (token) {
+            jwt.verify(token, jwtSecret, {}, (err, userData) => {
+                if (err) throw err;
+                resolve(userData);
+            });
+        } else {
+            reject('no token');
+        }
+    });
 
+}
 app.get('/profile', (req, res) => {
     const token = req.cookies?.token;
 
@@ -43,6 +54,17 @@ app.get('/profile', (req, res) => {
     } else {
         res.status(401).json('no token');
     }
+});
+
+app.get('/messages/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const userData = await getUserDataFromRequest(req);
+    const ourUserId = userData.userId;
+    const messages = await Message.find({
+        sender: { $in: [userId, ourUserId] },
+        recipient: { $in: [userId, ourUserId] },
+    }).sort({ createdAt: 1 });
+    res.json(messages);
 });
 
 app.post('/login', async (req, res) => {
@@ -118,21 +140,20 @@ wss.on('connection', (connection, req) => {
             });
         }
         if (recipient && (text || file)) {
-            // const messageDoc = await Message.create({
-            //     sender: connection.userId,
-            //     recipient,
-            //     text,
-            //     file: file ? filename : null,
-            // });
-            console.log('created message');
+            const messageDoc = await Message.create({
+                sender: connection.userId,
+                recipient,
+                text,
+                file: file ? filename : null,
+            });
             [...wss.clients]
                 .filter(c => c.userId === recipient)
                 .forEach(c => c.send(JSON.stringify({
                     text,
                     sender: connection.userId,
                     recipient,
+                    _id: messageDoc._id,
                     // file: file ? filename : null,
-                    // _id: messageDoc._id,
                 })));
         }
     });
