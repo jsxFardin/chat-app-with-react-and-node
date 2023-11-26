@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const ws = require('ws');
+const fs = require('fs');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const User = require('./models/User');
@@ -28,6 +29,7 @@ app.use(cors({
     credentials: true,
     origin: process.env.CLIENT_URL
 }));
+app.use('/uploads', express.static(__dirname + '/uploads'));
 
 async function getUserDataFromRequest(req) {
     return new Promise((resolve, reject) => {
@@ -56,6 +58,12 @@ app.get('/profile', (req, res) => {
     }
 });
 
+app.get('/people', async (req, res) => {
+    const users = await User.find({}, { '_id': 1, username: 1 });
+    res.json(users);
+});
+
+
 app.get('/messages/:userId', async (req, res) => {
     const { userId } = req.params;
     const userData = await getUserDataFromRequest(req);
@@ -66,6 +74,11 @@ app.get('/messages/:userId', async (req, res) => {
     }).sort({ createdAt: 1 });
     res.json(messages);
 });
+
+app.post('/logout', (req, res) => {
+    res.cookie('token', '', { sameSite: 'none', secure: true }).json('ok');
+});
+
 
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
@@ -108,6 +121,33 @@ const server = app.listen(4000);
 
 const wss = new ws.WebSocketServer({ server });
 wss.on('connection', (connection, req) => {
+
+    function notifyAboutOnlinePeople() {
+        [...wss.clients].forEach(client => {
+            client.send(JSON.stringify({
+                online: [...wss.clients].map(c => ({ userId: c.userId, username: c.username })),
+            }));
+        });
+    }
+
+    connection.isAlive = true;
+
+    connection.timer = setInterval(() => {
+        connection.ping();
+        connection.deathTimer = setTimeout(() => {
+            connection.isAlive = false;
+            clearInterval(connection.timer);
+            connection.terminate();
+            notifyAboutOnlinePeople();
+            console.log('dead');
+        }, 1000);
+    }, 5000);
+
+    connection.on('pong', () => {
+        clearTimeout(connection.deathTimer);
+    });
+
+
     const cookies = req.headers.cookie;
     if (cookies) {
         const tokenCookieString = cookies.split(';').find(str => str.startsWith('token='));
@@ -158,10 +198,6 @@ wss.on('connection', (connection, req) => {
         }
     });
 
-    [...wss.clients].forEach(client => {
-        client.send(JSON.stringify({
-            online: [...wss.clients].map(c => ({ userId: c.userId, username: c.username })),
-        }));
-    });
+    notifyAboutOnlinePeople();
 
 });
